@@ -1,0 +1,5 @@
+libsql
+requests
+apscheduler
+fastapi
+uvicorn
