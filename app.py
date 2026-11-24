@@ -3,6 +3,7 @@ import libsql
 import requests
 from datetime import datetime
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 from apscheduler.schedulers.background import BackgroundScheduler
 import uvicorn
 
@@ -378,7 +379,252 @@ def check_results():
         enviar_telegram(msg)
 
 # ==========================================
-# RENDER WEB SERVICE (FastAPI + Scheduler)
+# DASHBOARD WEB (ESTILO CLARO)
+# ==========================================
+@app.get("/", response_class=HTMLResponse)
+def dashboard():
+    try:
+        con = get_db()
+        try:
+            rows = con.execute("""
+                SELECT id, matchup, decision, q3_total, proyeccion, linea_cierre, cuota, final_total, status
+                FROM senales_cierre_q3
+                ORDER BY id DESC
+            """).fetchall()
+        finally:
+            con.close()
+
+        won = sum(1 for r in rows if r[8] == "WON")
+        lost = sum(1 for r in rows if r[8] == "LOST")
+        pending = sum(1 for r in rows if r[8] == "PENDING")
+        settled = won + lost
+        win_rate = (won / settled * 100) if settled > 0 else 0.0
+
+        units = 0.0
+        for r in rows:
+            cuota_val = float(r[6] or 0.0)
+            if r[8] == "WON":
+                units += (cuota_val - 1.0)
+            elif r[8] == "LOST":
+                units -= 1.0
+
+        wr_color = "#16a34a" if win_rate >= 50 else "#dc2626"
+        units_color = "#16a34a" if units >= 0 else "#dc2626"
+
+        filas_html = ""
+        if not rows:
+            filas_html = (
+                "<tr><td colspan='8' style='padding: 24px; color: #64748b;'>"
+                "No hay señales guardadas aún. Esperando cierres de Q3..."
+                "</td></tr>"
+            )
+        else:
+            for r in rows:
+                _, matchup, decision, q3_pts, proy, linea, cuota, total_final, status = r
+                badge_dir = (
+                    "<span class='dir-over'>⬆️ OVER</span>"
+                    if decision == "OVER"
+                    else "<span class='dir-under'>⬇️ UNDER</span>"
+                )
+                if status == "WON":
+                    badge_status = "<span class='badge won'>GANADA ✅</span>"
+                elif status == "LOST":
+                    badge_status = "<span class='badge lost'>PERDIDA ❌</span>"
+                elif status == "PUSH":
+                    badge_status = "<span class='badge push'>PUSH ⚖️</span>"
+                else:
+                    badge_status = "<span class='badge pending'>PENDIENTE ⏳</span>"
+
+                filas_html += f"""
+                <tr>
+                    <td class='col-match'>{matchup}</td>
+                    <td>{q3_pts}</td>
+                    <td>{float(proy):.1f}</td>
+                    <td class='col-line'>{float(linea):.1f}</td>
+                    <td>{badge_dir}</td>
+                    <td>@{float(cuota):.2f}</td>
+                    <td>{total_final if total_final is not None else '-'}</td>
+                    <td>{badge_status}</td>
+                </tr>
+                """
+
+        return f"""
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+            <meta charset="UTF-8">
+            <title>Q3 Cierre Alerts</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <style>
+                * {{ box-sizing: border-box; }}
+                body {{
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                    background-color: #f4f6f9;
+                    color: #1e293b;
+                    margin: 0;
+                    padding: 28px 32px;
+                }}
+                .container {{ max-width: 1220px; margin: 0 auto; }}
+                h1 {{
+                    margin: 0 0 22px 0;
+                    font-size: 28px;
+                    font-weight: 800;
+                    color: #0f172a;
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                }}
+                .cards {{
+                    display: grid;
+                    grid-template-columns: repeat(5, 1fr);
+                    gap: 16px;
+                    margin-bottom: 24px;
+                }}
+                @media (max-width: 900px) {{
+                    .cards {{ grid-template-columns: repeat(2, 1fr); }}
+                }}
+                @media (max-width: 520px) {{
+                    .cards {{ grid-template-columns: 1fr; }}
+                }}
+                .card {{
+                    background: #ffffff;
+                    border-radius: 10px;
+                    padding: 20px 16px;
+                    text-align: center;
+                    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
+                }}
+                .card-title {{
+                    font-size: 12px;
+                    font-weight: 700;
+                    letter-spacing: 0.6px;
+                    text-transform: uppercase;
+                    color: #64748b;
+                    margin-bottom: 10px;
+                }}
+                .card-val {{
+                    font-size: 32px;
+                    font-weight: 800;
+                    line-height: 1.1;
+                }}
+                .table-wrap {{
+                    background: #ffffff;
+                    border-radius: 10px;
+                    overflow-x: auto;
+                    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
+                }}
+                table {{
+                    width: 100%;
+                    border-collapse: collapse;
+                    min-width: 760px;
+                }}
+                th {{
+                    padding: 15px 14px;
+                    font-size: 11.5px;
+                    font-weight: 700;
+                    letter-spacing: 0.5px;
+                    text-transform: uppercase;
+                    color: #64748b;
+                    background: #ffffff;
+                    border-bottom: 1px solid #e2e8f0;
+                    text-align: center;
+                }}
+                th.col-match, td.col-match {{ text-align: left; padding-left: 20px; }}
+                td {{
+                    padding: 15px 14px;
+                    border-bottom: 1px solid #f1f5f9;
+                    text-align: center;
+                    font-size: 14px;
+                    color: #334155;
+                }}
+                tr:last-child td {{ border-bottom: none; }}
+                tr:hover td {{ background: #f8fafc; }}
+                .col-match {{ font-weight: 600; color: #0f172a; }}
+                .col-line {{ font-weight: 700; color: #2563eb; }}
+                .dir-over {{
+                    font-size: 12px;
+                    font-weight: 700;
+                    color: #15803d;
+                    background: #dcfce7;
+                    padding: 4px 8px;
+                    border-radius: 5px;
+                }}
+                .dir-under {{
+                    font-size: 12px;
+                    font-weight: 700;
+                    color: #b91c1c;
+                    background: #fee2e2;
+                    padding: 4px 8px;
+                    border-radius: 5px;
+                }}
+                .badge {{
+                    display: inline-block;
+                    font-size: 11.5px;
+                    font-weight: 800;
+                    padding: 5px 10px;
+                    border-radius: 5px;
+                    letter-spacing: 0.3px;
+                }}
+                .won {{ background: #bbf7d0; color: #15803d; }}
+                .lost {{ background: #fecaca; color: #b91c1c; }}
+                .pending {{ background: #fef08a; color: #a16207; }}
+                .push {{ background: #e2e8f0; color: #475569; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🎯 Q3 Cierre Alerts</h1>
+
+                <div class="cards">
+                    <div class="card" style="border-top: 4px solid {wr_color};">
+                        <div class="card-title">Win Rate</div>
+                        <div class="card-val" style="color: {wr_color};">{win_rate:.1f}%</div>
+                    </div>
+                    <div class="card" style="border-top: 4px solid {units_color};">
+                        <div class="card-title">Unidades</div>
+                        <div class="card-val" style="color: {units_color};">{units:+.2f} u</div>
+                    </div>
+                    <div class="card" style="border-top: 4px solid #16a34a;">
+                        <div class="card-title">Ganadas</div>
+                        <div class="card-val" style="color: #16a34a;">{won}</div>
+                    </div>
+                    <div class="card" style="border-top: 4px solid #dc2626;">
+                        <div class="card-title">Perdidas</div>
+                        <div class="card-val" style="color: #dc2626;">{lost}</div>
+                    </div>
+                    <div class="card" style="border-top: 4px solid #eab308;">
+                        <div class="card-title">Pendientes</div>
+                        <div class="card-val" style="color: #eab308;">{pending}</div>
+                    </div>
+                </div>
+
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th class="col-match">Partido</th>
+                                <th>Pts Q3</th>
+                                <th>Proyección (×1.3)</th>
+                                <th>Línea Cierre</th>
+                                <th>Señal</th>
+                                <th>Cuota</th>
+                                <th>Total Final</th>
+                                <th>Estado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {filas_html}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+    except Exception as e:
+        return f"<h1>Error cargando dashboard</h1><p>{e}</p>"
+
+# ==========================================
+# ARRANQUE EN RENDER
 # ==========================================
 @app.on_event("startup")
 def startup_event():
@@ -388,11 +634,6 @@ def startup_event():
     scheduler.add_job(check_results, "interval", minutes=5)
     scheduler.start()
     print("🚀 NBA Q3 Cierre Bot iniciado en Render.")
-
-@app.get("/")
-@app.head("/")
-def root():
-    return {"status": "running", "service": "nba-q3-cierre-bot"}
 
 @app.get("/health")
 @app.head("/health")
